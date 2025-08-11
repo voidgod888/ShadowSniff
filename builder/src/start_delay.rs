@@ -27,13 +27,14 @@ use crate::{Ask, ToExpr};
 use inquire::{CustomType, InquireError};
 use proc_macro2::TokenStream;
 use quote::quote;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::num::ParseIntError;
 use std::ops::RangeInclusive;
 use std::str::FromStr;
 use thiserror::Error;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum StartDelay {
     Fixed(u32),
     Random(RangeInclusive<u32>),

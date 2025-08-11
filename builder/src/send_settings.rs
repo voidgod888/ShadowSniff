@@ -29,13 +29,18 @@ use derive_new::new;
 use inquire::{Confirm, InquireError, Select};
 use proc_macro2::TokenStream;
 use quote::quote;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter};
 
-pub type Uploader = (UploaderService, UploaderUsecase);
+#[derive(new, Serialize, Deserialize, Clone)]
+pub struct Uploader {
+    service: UploaderService,
+    usecase: UploaderUsecase,
+}
 
-#[derive(Display, EnumIter, Clone)]
+#[derive(Display, EnumIter, Clone, Serialize, Deserialize)]
 pub enum UploaderService {
     Gofile,
     TmpFiles,
@@ -73,7 +78,7 @@ impl ToExpr<(TokenStream,)> for UploaderService {
     }
 }
 
-#[derive(EnumIter, Clone)]
+#[derive(EnumIter, Clone, Serialize, Deserialize)]
 pub enum UploaderUsecase {
     Always,
     WhenLogExceedsLimit,
@@ -103,7 +108,7 @@ impl Ask for UploaderUsecase {
     }
 }
 
-#[derive(new)]
+#[derive(new, Serialize, Deserialize)]
 pub struct SendSettings {
     pub(crate) service: SenderService,
     pub(crate) uploader: Option<Uploader>,
@@ -120,12 +125,18 @@ impl Ask for Option<Uploader> {
             .prompt()?;
 
         if !r#use {
-            return Ok(None);
+            let sure = Confirm::new("You may lose your log if it's too big. Are you sure?")
+                .with_default(false)
+                .prompt()?;
+
+            if sure {
+                return Ok(None);
+            }
         }
 
         let service = UploaderService::ask()?;
         let usecase = UploaderUsecase::ask()?;
-        Ok(Some((service, usecase)))
+        Ok(Some(Uploader::new(service, usecase)))
     }
 }
 
@@ -140,5 +151,45 @@ impl Ask for SendSettings {
         let uploader = Option::<Uploader>::ask()?;
 
         Ok(Self::new(service, uploader))
+    }
+}
+
+impl ToExpr for SendSettings {
+    fn to_expr(&self, _args: ()) -> TokenStream {
+        let expr = self.expr_internal();
+
+        quote! {
+            {
+                #expr
+            }
+        }
+    }
+}
+
+impl SendSettings {
+    fn expr_internal(&self) -> TokenStream {
+        let base = match self.service.clone() {
+            SenderService::TelegramBot(bot) => bot.to_expr(()),
+            SenderService::DiscordWebhook(webhook) => webhook.to_expr(()),
+        };
+
+        let Some(Uploader { service, usecase }) = self.uploader.clone() else {
+            return base;
+        };
+
+        match usecase.clone() {
+            UploaderUsecase::Always => service.to_expr((base,)),
+            UploaderUsecase::WhenLogExceedsLimit => {
+                let sender_clone = quote! { sender.clone() };
+                let wrapper_tokens = service.to_expr((sender_clone,));
+
+                quote! {
+                    let sender = #base;
+                    let wrapper = #wrapper_tokens;
+
+                    sender::size_fallback::SizeFallbackSender::new(sender, wrapper)
+                }
+            }
+        }
     }
 }

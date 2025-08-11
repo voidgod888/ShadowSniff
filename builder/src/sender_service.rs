@@ -32,6 +32,10 @@ use quote::quote;
 use reqwest::blocking::Client;
 use sender::discord_webhook::DiscordWebhookSender;
 use sender::telegram_bot::TelegramBotSender;
+use serde::de::{MapAccess, Visitor};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use std::fmt;
 use std::fmt::Display;
 use std::io::ErrorKind;
 use std::ops::Deref;
@@ -155,6 +159,91 @@ impl ToExpr for DiscordWebhookSender {
 pub enum SenderService {
     TelegramBot(TelegramBotSender),
     DiscordWebhook(DiscordWebhookSender),
+}
+
+impl Serialize for SenderService {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            SenderService::TelegramBot(bot) => {
+                let mut state = serializer.serialize_struct("TelegramBot", 3)?;
+                state.serialize_field("type", "telegram_bot")?;
+                state.serialize_field("chat_id", &*bot.chat_id)?;
+                state.serialize_field("token", &*bot.token)?;
+                state.end()
+            }
+            SenderService::DiscordWebhook(webhook) => {
+                let mut state = serializer.serialize_struct("DiscordWebhook", 2)?;
+                state.serialize_field("type", "discord_webhook")?;
+                state.serialize_field("webhook", &*webhook.webhook)?;
+                state.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SenderService {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct SenderVisitor;
+
+        impl<'de> Visitor<'de> for SenderVisitor {
+            type Value = SenderService;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a SenderService enum")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<Self::Value, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut kind: Option<String> = None;
+                let mut chat_id: Option<String> = None;
+                let mut token: Option<String> = None;
+                let mut webhook: Option<String> = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "type" => kind = Some(map.next_value()?),
+                        "chat_id" => chat_id = Some(map.next_value()?),
+                        "token" => token = Some(map.next_value()?),
+                        "webhook" => webhook = Some(map.next_value()?),
+                        _ => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+
+                match kind.as_deref() {
+                    Some("telegram_bot") => {
+                        let chat_id = chat_id.ok_or_else(|| de::Error::missing_field("chat_id"))?;
+                        let token = token.ok_or_else(|| de::Error::missing_field("token"))?;
+                        Ok(SenderService::TelegramBot(TelegramBotSender::new(
+                            chat_id, token,
+                        )))
+                    }
+                    Some("discord_webhook") => {
+                        let webhook = webhook.ok_or_else(|| de::Error::missing_field("webhook"))?;
+                        Ok(SenderService::DiscordWebhook(DiscordWebhookSender::new(
+                            webhook,
+                        )))
+                    }
+                    Some(other) => Err(de::Error::unknown_variant(
+                        other,
+                        &["telegram_bot", "discord_webhook"],
+                    )),
+                    None => Err(de::Error::missing_field("type")),
+                }
+            }
+        }
+
+        deserializer.deserialize_map(SenderVisitor)
+    }
 }
 
 struct TelegramFactory;

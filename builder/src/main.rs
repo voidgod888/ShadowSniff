@@ -25,79 +25,61 @@
  */
 extern crate core;
 
-use builder::empty_log::ConsiderEmpty;
-use builder::send_settings::SendSettings;
-use builder::start_delay::StartDelay;
-use builder::{Ask, ToExprExt};
+use crate::ConfigError::Inquire;
+use builder::{Ask, BuilderConfig};
+use clap::Parser;
 use inquire::InquireError;
 use inquire::ui::{Color, RenderConfig, StyleSheet, Styled};
-use quote::quote;
-use std::process::{Command, Stdio};
-use builder::message_box::{Show, MessageBox};
+use std::fs;
+use std::path::PathBuf;
+use thiserror::Error;
 
-fn build(
-    send_settings: SendSettings,
-    consider_empty: Vec<ConsiderEmpty>,
-    start_delay: StartDelay,
-    message_box: Option<MessageBox>,
-) {
-    println!("\nStarting build...");
+#[derive(Parser, Debug)]
+#[command(name = "configurator")]
+struct Cli {
+    #[arg(long, help = "Uses config file to load/save")]
+    config: Option<PathBuf>,
 
-    let mut builder = &mut Command::new("cargo");
-
-    builder = builder.arg("build")
-        .env("RUSTFLAGS", "-Awarnings")
-        .arg("--release")
-        .arg("--features")
-        .arg("builder_build")
-        .env(
-            "BUILDER_SENDER_EXPR",
-            send_settings.to_expr_temp_file(()).display().to_string(),
-        )
-        .env(
-            "BUILDER_CONSIDER_EMPTY_EXPR",
-            consider_empty
-                .to_expr_temp_file((quote! {collector}, quote! {return;}))
-                .display()
-                .to_string(),
-        )
-        .env(
-            "BUILDER_START_DELAY",
-            start_delay.to_expr_temp_file(()).display().to_string(),
-        )
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-
-    if let Some(message_box) = message_box {
-        builder = builder
-            .arg("--features");
-        
-        builder = match message_box.show {
-            Show::Before => builder.arg("message_box_before_execution"),
-            Show::After => builder.arg("message_box_after_execution"),
-        };
-
-        builder = builder
-            .env(
-                "BUILDER_MESSAGE_BOX_EXPR",
-                message_box.to_expr_temp_file(()).display().to_string(),
-            )
-    }
-
-    let _ = builder.status()
-        .expect("Failed to start cargo build");
+    #[arg(long, help = "Save only saves config")]
+    save: bool,
 }
 
-macro_rules! ask {
-    ($expr:expr) => {{
+#[derive(Error, Debug)]
+enum ConfigError {
+    #[error("io error")]
+    Io(#[from] std::io::Error),
+
+    #[error("json parse error")]
+    Json(#[from] serde_json::Error),
+
+    #[error("inquire error")]
+    Inquire(#[from] InquireError),
+}
+
+fn load_config(cli: &Cli) -> Result<BuilderConfig, ConfigError> {
+    if let Some(config_path) = &cli.config {
+        let data = fs::read_to_string(config_path)?;
+        Ok(serde_json::from_str(&data)?)
+    } else {
+        Ok(BuilderConfig::ask()?)
+    }
+}
+
+fn save_config(config: BuilderConfig, save_path: &PathBuf) -> Result<(), ConfigError> {
+    let json = serde_json::to_string_pretty(&config)?;
+    fs::write(save_path, json)?;
+    Ok(())
+}
+
+macro_rules! cancellable {
+    ($expr:expr) => {
         match $expr {
             Ok(val) => val,
-            Err(InquireError::OperationCanceled) | Err(InquireError::OperationInterrupted) => {
-                return;
-            }
+            Err(Inquire(InquireError::OperationCanceled))
+            | Err(Inquire(InquireError::OperationInterrupted)) => return,
             Err(err) => panic!("{err:?}"),
         }
-    }};
+    };
 }
 
 fn main() {
@@ -112,13 +94,17 @@ fn main() {
             .with_prompt_prefix(Styled::new("?").with_fg(Color::LightRed)),
     );
 
-    let send = ask!(SendSettings::ask());
-    println!();
-    let start_delay = ask!(StartDelay::ask());
-    println!();
-    let message_box = ask!(Option::<MessageBox>::ask());
-    println!();
-    let consider_empty = ask!(Vec::<ConsiderEmpty>::ask());
+    let cli = Cli::parse();
+    let config = cancellable!(load_config(&cli));
 
-    build(send, consider_empty, start_delay, message_box);
+    if cli.save {
+        let save_path = cli
+            .config
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("config.json"));
+        cancellable!(save_config(config, &save_path));
+        println!("Config saved to {save_path:?}")
+    } else {
+        config.build()
+    }
 }
