@@ -31,16 +31,17 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
+use colored::Colorize;
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter};
 
-#[derive(new, Serialize, Deserialize, Clone)]
+#[derive(new, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Uploader {
     service: UploaderService,
     usecase: UploaderUsecase,
 }
 
-#[derive(Display, EnumIter, Clone, Serialize, Deserialize)]
+#[derive(Display, EnumIter, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum UploaderService {
     Gofile,
     TmpFiles,
@@ -78,7 +79,7 @@ impl ToExpr<(TokenStream,)> for UploaderService {
     }
 }
 
-#[derive(EnumIter, Clone, Serialize, Deserialize)]
+#[derive(EnumIter, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum UploaderUsecase {
     Always,
     WhenLogExceedsLimit,
@@ -113,6 +114,14 @@ pub struct SendSettings {
     pub(crate) service: SenderService,
     pub(crate) uploader: Option<Uploader>,
 }
+
+impl PartialEq for SendSettings {
+    fn eq(&self, other: &Self) -> bool {
+        self.service == other.service
+    }
+}
+
+impl Eq for SendSettings {}
 
 impl Ask for Option<Uploader> {
     fn ask() -> Result<Self, InquireError>
@@ -154,20 +163,66 @@ impl Ask for SendSettings {
     }
 }
 
-impl ToExpr for SendSettings {
-    fn to_expr(&self, _args: ()) -> TokenStream {
-        let expr = self.expr_internal();
+impl Ask for Vec<SendSettings> {
+    fn ask() -> Result<Self, InquireError>
+    where
+        Self: Sized
+    {
+        let mut senders = vec![SendSettings::ask()?];
+
+        println!();
+
+        let ask =
+            || Confirm::new("Would you like to specify additional log destinations?")
+                .with_help_message("Sends to all specified destinations, e.g. multiple Telegram chats or other targets.")
+                .with_default(false)
+                .prompt();
+
+        while ask()? {
+            println!();
+            let new_sender = SendSettings::ask()?;
+
+            if senders.contains(&new_sender) {
+                println!(
+                    "{}",
+                    "[!] That log destination in already specified. No new one was added.".red()
+                );
+            } else {
+                senders.push(new_sender);
+            }
+
+            println!();
+        }
+
+        Ok(senders)
+    }
+}
+
+impl ToExpr<(TokenStream, TokenStream, TokenStream)> for Vec<SendSettings> {
+    fn to_expr(&self, args: (TokenStream, TokenStream, TokenStream)) -> TokenStream {
+        let (log_name, zip, collector) = args;
+
+        let send_blocks: Vec<TokenStream> = self
+            .iter()
+            .map(|send| {
+                let body = send.to_expr(());
+
+                quote! {
+                    let _ = #body.send_archive(#log_name, #zip, #collector);
+                }
+            })
+            .collect();
 
         quote! {
             {
-                #expr
+                #(#send_blocks)*
             }
         }
     }
 }
 
-impl SendSettings {
-    fn expr_internal(&self) -> TokenStream {
+impl ToExpr for SendSettings {
+    fn to_expr(&self, _args: ()) -> TokenStream {
         let base = match self.service.clone() {
             SenderService::TelegramBot(bot) => bot.to_expr(()),
             SenderService::DiscordWebhook(webhook) => webhook.to_expr(()),
@@ -184,10 +239,12 @@ impl SendSettings {
                 let wrapper_tokens = service.to_expr((sender_clone,));
 
                 quote! {
-                    let sender = #base;
-                    let wrapper = #wrapper_tokens;
+                    {
+                        let sender = #base;
+                        let wrapper = #wrapper_tokens;
 
-                    sender::size_fallback::SizeFallbackSender::new(sender, wrapper)
+                        sender::size_fallback::SizeFallbackSender::new(sender, wrapper)
+                    }
                 }
             }
         }

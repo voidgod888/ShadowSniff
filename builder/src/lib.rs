@@ -40,6 +40,7 @@ use std::io::Write;
 use std::marker::Tuple;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use colored::Colorize;
 use tempfile::NamedTempFile;
 
 mod empty_log;
@@ -81,7 +82,7 @@ pub trait AskInstanceFactory: Display {
 
 #[derive(Serialize, Deserialize)]
 pub struct BuilderConfig {
-    send_settings: SendSettings,
+    send_settings: Vec<SendSettings>,
     consider_empty: Vec<ConsiderEmpty>,
     start_delay: StartDelay,
     message_box: Option<MessageBox>,
@@ -92,7 +93,7 @@ impl Ask for BuilderConfig {
     where
         Self: Sized,
     {
-        let send_settings = SendSettings::ask()?;
+        let send_settings = Vec::<SendSettings>::ask()?;
         println!();
         let start_delay = StartDelay::ask()?;
         println!();
@@ -111,6 +112,13 @@ impl Ask for BuilderConfig {
 
 impl BuilderConfig {
     pub fn build(self) {
+        if self.send_settings.is_empty() {
+            println!(
+                "{}",
+                "[!] No log destination specified.".red()
+            );
+        }
+
         println!("\nStarting build...");
 
         let mut builder = &mut Command::new("cargo");
@@ -124,7 +132,7 @@ impl BuilderConfig {
             .env(
                 "BUILDER_SENDER_EXPR",
                 self.send_settings
-                    .to_expr_temp_file(())
+                    .to_expr_temp_file((quote! {_log_name.clone()}, quote! {&_zip}, quote! {&collector}))
                     .display()
                     .to_string(),
             )
