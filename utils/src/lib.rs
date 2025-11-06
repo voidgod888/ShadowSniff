@@ -36,11 +36,13 @@ use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 
 pub mod base64;
 pub mod ecc;
+pub mod fpe;
 pub mod intern;
 pub mod logging;
 pub mod pc_info;
 pub mod process;
 pub mod random;
+pub mod veh;
 
 const FLAG_MAGIC_NUMBER: u32 = 0x1F1E6 /* 🇦 */ - 'A' as u32;
 
