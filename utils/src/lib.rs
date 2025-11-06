@@ -35,6 +35,7 @@ use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerf
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 
 pub mod base64;
+pub mod intern;
 pub mod logging;
 pub mod pc_info;
 pub mod process;

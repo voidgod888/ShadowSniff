@@ -44,6 +44,7 @@ use core::ptr::null_mut;
 use delegate::delegate;
 use obfstr::obfstr as s;
 use spin::RwLock;
+use utils::intern::intern_table_name;
 
 mod sqlite3_bindings;
 
@@ -133,12 +134,14 @@ impl DatabaseReader for Sqlite3BindingsDatabase {
     where
         S: AsRef<str>,
     {
-        let table_name_str = table_name.as_ref().to_string();
+        // Use string interning for table names to reduce allocations
+        let table_name_arc = intern_table_name(table_name.as_ref());
+        let table_name_str: &str = &table_name_arc;
         
         // Try to get cached statement
         let stmt = {
             let cache = self.statement_cache.read();
-            cache.get(&table_name_str).copied()
+            cache.get(table_name_str).copied()
         };
 
         let stmt = if let Some(cached_stmt) = stmt {
@@ -163,10 +166,10 @@ impl DatabaseReader for Sqlite3BindingsDatabase {
                 return None;
             }
 
-            // Cache the statement
+            // Cache the statement using interned string
             {
                 let mut cache = self.statement_cache.write();
-                cache.insert(table_name_str.clone(), new_stmt);
+                cache.insert(table_name_str.to_string(), new_stmt);
             }
 
             new_stmt

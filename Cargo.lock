@@ -316,6 +316,8 @@ dependencies = [
  "delegate",
  "filesystem",
  "obfstr",
+ "spin 0.10.0",
+ "utils",
 ]
 
 [[package]]
@@ -1966,6 +1968,7 @@ dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.3",
  "regedit",
+ "spin 0.10.0",
  "windows-sys 0.61.0",
 ]
 

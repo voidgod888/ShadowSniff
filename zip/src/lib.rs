@@ -273,10 +273,19 @@ impl ZipArchive {
                     file.deref()
                 };
 
+                // Use adaptive compression if default compression is set
+                let entry_compression = match self.compression {
+                    ZipCompression::DEFLATE(_) => {
+                        ZipCompression::adaptive_level_for_file(&rel_path.to_string(), data.len())
+                    }
+                    ZipCompression::NONE => ZipCompression::NONE,
+                };
+
                 let entry = ZipEntry {
                     path: rel_path.to_string(),
                     data,
                     modified: filetime_to_dos_date_time(&file_time),
+                    compression: entry_compression,
                 };
 
                 self.entries.push(entry);

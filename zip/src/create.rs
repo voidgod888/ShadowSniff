@@ -43,9 +43,10 @@ pub(super) fn create_zip(archive: &ZipArchive) -> Vec<u8> {
     let mut offset = 0;
 
     for entry in &archive.entries {
+        // Use per-entry compression level for adaptive compression
         let (compression_method, mut compressed) = (
-            archive.compression.method(),
-            archive.compression.compress(&entry.data),
+            entry.compression.method(),
+            entry.compression.compress(&entry.data),
         );
 
         let crc = crc32(&entry.data);
