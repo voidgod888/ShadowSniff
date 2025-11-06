@@ -58,14 +58,22 @@ impl RegistryValue {
             REG_BINARY => Binary(raw),
             REG_DWORD => {
                 if raw.len() >= 4 {
-                    Dword(u32::from_be_bytes(raw[..4].try_into().unwrap()))
+                    // Safe: we've checked the length, and try_into on array reference is infallible
+                    // But use explicit conversion to be safe
+                    let bytes: [u8; 4] = [raw[0], raw[1], raw[2], raw[3]];
+                    Dword(u32::from_be_bytes(bytes))
                 } else {
                     None
                 }
             }
             REG_QWORD => {
                 if raw.len() >= 8 {
-                    Qword(u64::from_be_bytes(raw[..8].try_into().unwrap()))
+                    // Safe: we've checked the length
+                    let bytes: [u8; 8] = [
+                        raw[0], raw[1], raw[2], raw[3],
+                        raw[4], raw[5], raw[6], raw[7],
+                    ];
+                    Qword(u64::from_be_bytes(bytes))
                 } else {
                     None
                 }

@@ -24,6 +24,7 @@
  * SOFTWARE.
  */
 
+use crate::FileSystemError;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -71,6 +72,16 @@ impl From<String> for Path {
 }
 
 impl Path {
+    /// Creates a new Path from a string-like value.
+    ///
+    /// The path is normalized:
+    /// - Forward slashes are converted to backslashes
+    /// - Consecutive backslashes are collapsed to single backslashes
+    ///
+    /// # Security Note
+    /// This function does not sanitize paths. It's the caller's responsibility
+    /// to ensure paths don't contain directory traversal sequences (`..`) or other
+    /// dangerous patterns if security is a concern.
     #[inline]
     pub fn new<S>(path: S) -> Self
     where
@@ -80,9 +91,61 @@ impl Path {
         path.as_ref().to_string().into()
     }
 
+    /// Validates that a path doesn't contain directory traversal patterns.
+    ///
+    /// Returns `true` if the path is safe, `false` if it contains potentially
+    /// dangerous patterns like `..` or `//`.
     #[inline]
-    pub fn as_absolute(&self) -> Path {
-        let current_dir = get_current_directory().unwrap();
+    pub fn is_safe(&self) -> bool {
+        !self.inner.contains("..") && !self.inner.contains("//")
+    }
+
+    /// Sanitizes the path by removing directory traversal patterns.
+    ///
+    /// This method removes `..` sequences and collapses consecutive slashes.
+    /// Note: This is a basic sanitization. For production use, consider more
+    /// robust path validation depending on your security requirements.
+    #[inline]
+    pub fn sanitized(&self) -> Self {
+        let mut normalized = String::with_capacity(self.inner.len());
+        let mut last_char = None;
+        
+        for c in self.inner.chars() {
+            match c {
+                '/' => {
+                    if last_char != Some('\\') {
+                        normalized.push('\\');
+                        last_char = Some('\\');
+                    }
+                }
+                '\\' => {
+                    normalized.push('\\');
+                    last_char = Some('\\');
+                }
+                _ => {
+                    normalized.push(c);
+                    last_char = Some(c);
+                }
+            }
+        }
+        
+        // Remove ".." patterns (basic sanitization)
+        while let Some(pos) = normalized.find("..") {
+            normalized.replace_range(pos..pos + 2, "");
+        }
+        
+        Self {
+            inner: Arc::from(normalized),
+        }
+    }
+
+    /// Converts this path to an absolute path.
+    ///
+    /// Returns an error if the current directory cannot be retrieved.
+    #[inline]
+    pub fn as_absolute_result(&self) -> Result<Path, FileSystemError> {
+        let current_dir = get_current_directory()
+            .ok_or(FileSystemError::CurrentDirectoryUnavailable)?;
 
         let trimmed = self.inner.trim_start_matches(['\\', '/'].as_ref());
         // Pre-allocate with known capacity to avoid reallocations
@@ -92,9 +155,19 @@ impl Path {
         full.push('\\');
         full.push_str(trimmed);
 
-        Path {
+        Ok(Path {
             inner: Arc::from(full),
-        }
+        })
+    }
+
+    /// Converts this path to an absolute path.
+    ///
+    /// # Panics
+    /// Panics if the current directory cannot be retrieved.
+    /// Use `as_absolute_result()` to handle errors gracefully.
+    #[inline]
+    pub fn as_absolute(&self) -> Path {
+        self.as_absolute_result().expect("Failed to get current directory - ensure running on Windows with proper permissions")
     }
 
     #[inline]
@@ -249,24 +322,82 @@ pub fn get_known_folder_path(folder_id: &windows_sys::core::GUID) -> Option<Path
 }
 
 impl Path {
-    pub fn system() -> Self {
-        get_known_folder_path(&FOLDERID_System).unwrap()
+    /// Gets the system directory path.
+    ///
+    /// Returns an error if the system directory path cannot be retrieved.
+    pub fn system_result() -> Result<Self, FileSystemError> {
+        get_known_folder_path(&FOLDERID_System)
+            .ok_or(FileSystemError::SystemPathUnavailable)
     }
 
-    pub fn appdata() -> Self {
-        get_known_folder_path(&FOLDERID_RoamingAppData).unwrap()
-    }
-
-    pub fn localappdata() -> Self {
-        get_known_folder_path(&FOLDERID_LocalAppData).unwrap()
-    }
-
-    pub fn temp() -> Self {
-        Self::localappdata() / "Temp"
-    }
-
+    /// Gets the system directory path.
+    ///
+    /// # Panics
+    /// Panics if the system directory path cannot be retrieved.
+    /// Use `system_result()` to handle errors gracefully.
     #[inline]
-    pub fn temp_file<S>(prefix: S) -> Self
+    pub fn system() -> Self {
+        Self::system_result().expect("Failed to get system directory - ensure running on Windows with proper permissions")
+    }
+
+    /// Gets the AppData (roaming) directory path.
+    ///
+    /// Returns an error if the AppData directory path cannot be retrieved.
+    pub fn appdata_result() -> Result<Self, FileSystemError> {
+        get_known_folder_path(&FOLDERID_RoamingAppData)
+            .ok_or(FileSystemError::SystemPathUnavailable)
+    }
+
+    /// Gets the AppData directory path.
+    ///
+    /// # Panics
+    /// Panics if the AppData directory path cannot be retrieved.
+    /// Use `appdata_result()` to handle errors gracefully.
+    #[inline]
+    pub fn appdata() -> Self {
+        Self::appdata_result().expect("Failed to get AppData directory - ensure running on Windows with proper permissions")
+    }
+
+    /// Gets the LocalAppData directory path.
+    ///
+    /// Returns an error if the LocalAppData directory path cannot be retrieved.
+    pub fn localappdata_result() -> Result<Self, FileSystemError> {
+        get_known_folder_path(&FOLDERID_LocalAppData)
+            .ok_or(FileSystemError::SystemPathUnavailable)
+    }
+
+    /// Gets the LocalAppData directory path.
+    ///
+    /// # Panics
+    /// Panics if the LocalAppData directory path cannot be retrieved.
+    /// Use `localappdata_result()` to handle errors gracefully.
+    #[inline]
+    pub fn localappdata() -> Self {
+        Self::localappdata_result().expect("Failed to get LocalAppData directory - ensure running on Windows with proper permissions")
+    }
+
+    /// Gets the temporary directory path.
+    ///
+    /// Returns an error if the LocalAppData directory cannot be retrieved.
+    pub fn temp_result() -> Result<Self, FileSystemError> {
+        Ok(Self::localappdata_result()? / "Temp")
+    }
+
+    /// Gets the temporary directory path.
+    ///
+    /// # Panics
+    /// Panics if the temp directory cannot be retrieved.
+    /// Use `temp_result()` to handle errors gracefully.
+    #[inline]
+    pub fn temp() -> Self {
+        Self::temp_result().expect("Failed to get temp directory - ensure running on Windows with proper permissions")
+    }
+
+    /// Creates a temporary file path with the given prefix.
+    ///
+    /// Returns an error if the temp directory cannot be retrieved.
+    #[inline]
+    pub fn temp_file_result<S>(prefix: S) -> Result<Self, FileSystemError>
     where
         S: AsRef<str>,
     {
@@ -277,7 +408,20 @@ impl Path {
         let mut filename = String::with_capacity(capacity);
         filename.push_str(prefix_str);
         write!(filename, "{ms:x}").unwrap_or(());
-        Self::temp() / filename
+        Ok(Self::temp_result()? / filename)
+    }
+
+    /// Creates a temporary file path with the given prefix.
+    ///
+    /// # Panics
+    /// Panics if the temp directory cannot be retrieved.
+    /// Use `temp_file_result()` to handle errors gracefully.
+    #[inline]
+    pub fn temp_file<S>(prefix: S) -> Self
+    where
+        S: AsRef<str>,
+    {
+        Self::temp_file_result(prefix).expect("Failed to create temp file path - ensure running on Windows with proper permissions")
     }
 }
 

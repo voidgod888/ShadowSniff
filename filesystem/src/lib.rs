@@ -31,9 +31,89 @@ pub mod path;
 pub mod storage;
 pub mod virtualfs;
 
+#[cfg(test)]
+mod virtualfs_tests;
+
 use crate::path::Path;
 use alloc::vec::Vec;
 use core::ops::Deref;
+
+/// Error type for file system operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileSystemError {
+    /// File or directory not found
+    NotFound,
+    /// Path exists but is a directory (expected file)
+    IsDirectory,
+    /// Path exists but is a file (expected directory)
+    IsFile,
+    /// File or directory already exists
+    AlreadyExists,
+    /// Parent directory does not exist
+    NoParent,
+    /// Parent exists but is not a directory
+    ParentNotDirectory,
+    /// Directory is not empty
+    DirectoryNotEmpty,
+    /// A file exists where a directory should be created
+    FileExistsAtPath,
+    /// Current directory cannot be retrieved
+    CurrentDirectoryUnavailable,
+    /// System folder path cannot be retrieved
+    SystemPathUnavailable,
+    /// Invalid path provided
+    InvalidPath,
+    /// Generic error with code
+    Other(u32),
+}
+
+impl FileSystemError {
+    /// Convert from numeric error code (used for backward compatibility)
+    pub fn from_code(code: u32) -> Self {
+        match code {
+            1 => Self::IsDirectory,
+            2 => Self::NotFound,
+            3 => Self::AlreadyExists,
+            4 => Self::NoParent,
+            5 => Self::ParentNotDirectory,
+            6 => Self::FileExistsAtPath,
+            7 => Self::DirectoryNotEmpty,
+            8 => Self::NotFound,
+            9 => Self::IsFile,
+            _ => Self::Other(code),
+        }
+    }
+
+    /// Convert to numeric error code (for backward compatibility)
+    pub fn to_code(self) -> u32 {
+        match self {
+            Self::IsDirectory => 1,
+            Self::NotFound => 2,
+            Self::AlreadyExists => 3,
+            Self::NoParent => 4,
+            Self::ParentNotDirectory => 5,
+            Self::FileExistsAtPath => 6,
+            Self::DirectoryNotEmpty => 7,
+            Self::IsFile => 9,
+            Self::CurrentDirectoryUnavailable => 1000001,
+            Self::SystemPathUnavailable => 1000002,
+            Self::InvalidPath => 1000003,
+            Self::Other(code) => code,
+        }
+    }
+}
+
+impl From<u32> for FileSystemError {
+    fn from(code: u32) -> Self {
+        Self::from_code(code)
+    }
+}
+
+impl From<FileSystemError> for u32 {
+    fn from(err: FileSystemError) -> Self {
+        err.to_code()
+    }
+}
 
 /// Trait representing a generic file system interface.
 pub trait FileSystem: AsRef<Self> + Send + Sync {

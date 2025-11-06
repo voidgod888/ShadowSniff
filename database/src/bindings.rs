@@ -119,7 +119,12 @@ impl DatabaseReader for Sqlite3BindingsDatabase {
         S: AsRef<str>,
     {
         let query = format!("{} {}", s!("SELECT * FROM"), table_name.as_ref());
-        let c_query = CString::new(query).unwrap();
+        // CString::new can fail if query contains null bytes - filter them out
+        let query_sanitized: String = query.chars().filter(|&c| c != '\0').collect();
+        let c_query = match CString::new(query_sanitized) {
+            Ok(cstr) => cstr,
+            Err(_) => return None, // Should not happen after filtering, but handle gracefully
+        };
         let mut stmt: *mut sqlite3_stmt = null_mut();
 
         let rc =

@@ -86,8 +86,12 @@ pub fn get_ip_info() -> Option<IpInfo> {
     GLOBAL_IP_INFO.lock().clone()
 }
 
+/// Gets IP info, panicking if not initialized.
+///
+/// # Panics
+/// Panics if IP info has not been initialized. Use `get_ip_info()` to handle errors gracefully.
 pub fn unwrapped_ip_info() -> IpInfo {
-    get_ip_info().unwrap()
+    get_ip_info().expect("IP info not initialized - call init() or init_ip_info() first")
 }
 
 fn init_ip_info(api: &str, mapper: impl FnOnce(Value) -> Option<IpInfo>) -> Option<bool> {

@@ -65,6 +65,10 @@ impl FileSystem for StorageFileSystem {
         let path = path.as_ref();
         let wide = path.to_wide();
 
+        // Safety: Windows API calls are safe when used correctly:
+        // - wide.as_ptr() is valid for the lifetime of wide (which outlives the call)
+        // - All parameters are valid values
+        // - We check the return value and clean up on error
         unsafe {
             let handle = CreateFileW(
                 wide.as_ptr(),
@@ -82,7 +86,8 @@ impl FileSystem for StorageFileSystem {
 
             let mut size: i64 = zeroed();
             if GetFileSizeEx(handle, &mut size) == 0 {
-                CloseHandle(handle);
+                // Ensure handle is closed even on error
+                let _ = CloseHandle(handle);
                 return Err(1000001);
             }
 

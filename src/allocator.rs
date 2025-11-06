@@ -46,8 +46,22 @@ const NATURAL_HEAP_ALIGN_WITH_HEADER: usize = 16 + 1;
 
 const PAGE_SIZE: usize = 4096;
 
+/// Custom Windows heap allocator implementation.
+///
+/// This allocator uses Windows heap APIs for small allocations and VirtualAlloc for
+/// larger aligned allocations. All unsafe operations are safe because:
+/// - We only call Windows API functions that are guaranteed to be safe when used correctly
+/// - We check return values for null/invalid handles before using them
+/// - Alignment calculations are validated to prevent overflows
 #[allow(unsafe_op_in_unsafe_fn)]
 unsafe impl GlobalAlloc for WinHeapAlloc {
+    /// Allocates memory according to the given layout.
+    ///
+    /// # Safety
+    /// This function is safe because:
+    /// - `GetProcessHeap()` returns a valid process heap handle or null (checked)
+    /// - `HeapAlloc` and `VirtualAlloc` are Windows API calls with well-defined behavior
+    /// - All alignment calculations are bounds-checked to prevent overflow
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let heap = GetProcessHeap();
         if heap.is_null() {
@@ -66,6 +80,15 @@ unsafe impl GlobalAlloc for WinHeapAlloc {
         }
     }
 
+    /// Deallocates memory previously allocated with `alloc`.
+    ///
+    /// # Safety
+    /// This function is safe because:
+    /// - `ptr` and `layout` must match a previous `alloc` call (caller's responsibility)
+    /// - We check for null pointers before dereferencing
+    /// - `GetProcessHeap()` is safe to call and we check for null
+    /// - `HeapFree` and `VirtualFree` are Windows API calls with well-defined behavior
+    /// - Header pointer arithmetic is validated with bounds checks
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let heap = GetProcessHeap();
         if ptr.is_null() || heap.is_null() {
@@ -95,6 +118,16 @@ unsafe impl GlobalAlloc for WinHeapAlloc {
     }
 }
 
+/// Allocates memory with a header for alignment tracking.
+///
+/// This function allocates extra space to store the original pointer for later deallocation.
+///
+/// # Safety
+/// This function is safe because:
+/// - `heap` must be a valid process heap handle (caller guarantees this via `GetProcessHeap()`)
+/// - All arithmetic operations are checked for overflow
+/// - Pointer arithmetic for alignment is bounded by the allocated size
+/// - Header write is within the allocated bounds (verified by debug assertions)
 #[inline]
 #[allow(unsafe_op_in_unsafe_fn)]
 unsafe fn alloc_with_header(heap: HANDLE, size: usize, align: usize) -> *mut u8 {
