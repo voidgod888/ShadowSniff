@@ -83,7 +83,6 @@ fn string_from_utf16_null_terminated(bytes: &[u8]) -> String {
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn read_registry_value<K, V>(base: HKEY, subkey: K, value: V) -> Result<RegistryValue, u32>
 where
     K: AsRef<str>,

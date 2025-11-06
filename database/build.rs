@@ -25,7 +25,8 @@
  */
 
 fn main() {
-    cc::Build::new()
+    let mut build = cc::Build::new();
+    build
         .file("sqlite3/sqlite3.c")
         .define("SQLITE_OMIT_LOAD_EXTENSION", None)
         .define("SQLITE_THREADSAFE", "0")
@@ -83,16 +84,22 @@ fn main() {
         .define("SQLITE_DISABLE_DIRSYNC", None)
         .define("SQLITE_OMIT_BETWEEN_OPTIMIZATION", None)
         .define("SQLITE_OMIT_CASE_SENSITIVE_LIKE_PRAGMA", None)
-        .opt_level(1)
-        .flag("/DNDEBUG")
-        .flag("/EHsc-")
-        .flag("/GR-")
-        .flag("/GF")
-        .flag("/GS-")
-        .flag("/Zl")
-        .flag("/Gw")
-        .flag("/Gy")
-        .compile("sqlite3");
+        .opt_level(1);
+
+    // Add MSVC-specific optimization flags only on Windows with MSVC
+    if cfg!(target_env = "msvc") {
+        build
+            .flag("/DNDEBUG")
+            .flag("/EHsc-")
+            .flag("/GR-")
+            .flag("/GF")
+            .flag("/GS-")
+            .flag("/Zl")
+            .flag("/Gw")
+            .flag("/Gy");
+    }
+
+    build.compile("sqlite3");
 
     println!("cargo:rustc-link-lib=static=sqlite3");
 }

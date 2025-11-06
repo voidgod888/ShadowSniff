@@ -26,7 +26,7 @@
 
 #[cfg(not(test))]
 #[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
+fn panic(_info: &core::panic::PanicInfo) -> ! {
     use windows_sys::Win32::System::Threading::ExitProcess;
 
     cfg_if::cfg_if! {
@@ -37,7 +37,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
             use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxA};
 
             let mut message = String::with_capacity(512);
-            let _ = write!(&mut message, "{info}\0");
+            let _ = write!(&mut message, "{_info}\0");
 
             unsafe {
                 MessageBoxA(

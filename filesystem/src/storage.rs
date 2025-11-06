@@ -87,8 +87,8 @@ impl FileSystem for StorageFileSystem {
             }
 
             let file_size = size as usize;
-            let mut buffer: Vec<u8> = vec![0u8; file_size];
-            buffer.set_len(file_size);
+            let mut buffer = Vec::with_capacity(file_size);
+            unsafe { buffer.set_len(file_size); }
             let mut bytes_read = 0;
 
             let read_ok = ReadFile(

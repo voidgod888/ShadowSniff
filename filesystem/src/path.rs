@@ -79,7 +79,8 @@ impl Path {
     }
 
     pub fn as_absolute(&self) -> Path {
-        let current_dir = get_current_directory().unwrap();
+        let current_dir = get_current_directory()
+            .unwrap_or_else(|| Path::new("C:\\"));
 
         let trimmed = self.inner.trim_start_matches(['\\', '/'].as_ref());
         let full = format!("{current_dir}\\{trimmed}");
@@ -222,15 +223,18 @@ pub fn get_known_folder_path(folder_id: &windows_sys::core::GUID) -> Option<Path
 
 impl Path {
     pub fn system() -> Self {
-        get_known_folder_path(&FOLDERID_System).unwrap()
+        get_known_folder_path(&FOLDERID_System)
+            .unwrap_or_else(|| Path::new("C:\\Windows\\System32"))
     }
 
     pub fn appdata() -> Self {
-        get_known_folder_path(&FOLDERID_RoamingAppData).unwrap()
+        get_known_folder_path(&FOLDERID_RoamingAppData)
+            .unwrap_or_else(|| Path::new("C:\\Users\\Default\\AppData\\Roaming"))
     }
 
     pub fn localappdata() -> Self {
-        get_known_folder_path(&FOLDERID_LocalAppData).unwrap()
+        get_known_folder_path(&FOLDERID_LocalAppData)
+            .unwrap_or_else(|| Path::new("C:\\Users\\Default\\AppData\\Local"))
     }
 
     pub fn temp() -> Self {
