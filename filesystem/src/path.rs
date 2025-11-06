@@ -27,8 +27,8 @@
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use alloc::{format, vec};
-use core::fmt::{Display, Formatter};
+use alloc::vec;
+use core::fmt::{Display, Formatter, Write};
 use core::iter::once;
 use core::ops::{Deref, Div};
 use core::ptr::null_mut;
@@ -71,22 +71,33 @@ impl From<String> for Path {
 }
 
 impl Path {
+    #[inline]
     pub fn new<S>(path: S) -> Self
     where
         S: AsRef<str>,
     {
+        // Reuse From<String> normalization logic
         path.as_ref().to_string().into()
     }
 
+    #[inline]
     pub fn as_absolute(&self) -> Path {
         let current_dir = get_current_directory().unwrap();
 
         let trimmed = self.inner.trim_start_matches(['\\', '/'].as_ref());
-        let full = format!("{current_dir}\\{trimmed}");
+        // Pre-allocate with known capacity to avoid reallocations
+        let capacity = current_dir.len() + 1 + trimmed.len();
+        let mut full = String::with_capacity(capacity);
+        full.push_str(&current_dir);
+        full.push('\\');
+        full.push_str(trimmed);
 
-        Path::new(full)
+        Path {
+            inner: Arc::from(full),
+        }
     }
 
+    #[inline]
     pub fn name(&self) -> Option<&str> {
         self.inner
             .rsplit('\\')
@@ -94,14 +105,17 @@ impl Path {
             .map(|s| s.rsplit_once('.').map(|(name, _)| name).unwrap_or(s))
     }
 
+    #[inline]
     pub fn fullname(&self) -> Option<&str> {
         self.inner.rsplit('\\').next()
     }
 
+    #[inline]
     pub fn extension(&self) -> Option<&str> {
         self.inner.rsplit('\\').next()?.rsplit_once('.')?.1.into()
     }
 
+    #[inline]
     pub fn name_and_extension(&self) -> Option<(&str, Option<&str>)> {
         let last_component = self.inner.rsplit('\\').next()?;
 
@@ -111,6 +125,13 @@ impl Path {
         }
     }
 
+    /// Get the inner string slice directly
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.inner
+    }
+
+    #[inline]
     pub fn parent(&self) -> Option<Path> {
         if let Some(pos) = self.inner.rfind('\\') {
             if pos == 0 {
@@ -154,17 +175,24 @@ where
 {
     type Output = Path;
 
+    #[inline]
     fn div(self, rhs: S) -> Self::Output {
-        let rhs_str = rhs.as_ref().replace('/', "\\");
-        let mut new_path = self.inner.to_string();
-
-        if !new_path.ends_with('\\') {
+        let rhs_ref = rhs.as_ref();
+        let rhs_normalized = rhs_ref.replace('/', "\\");
+        let lhs_len = self.inner.len();
+        let needs_sep = !self.inner.ends_with('\\');
+        let capacity = lhs_len + rhs_normalized.len() + if needs_sep { 1 } else { 0 };
+        let mut new_path = String::with_capacity(capacity);
+        
+        new_path.push_str(&self.inner);
+        if needs_sep {
             new_path.push('\\');
         }
+        new_path.push_str(&rhs_normalized);
 
-        new_path.push_str(&rhs_str);
-
-        Path::new(Arc::from(new_path))
+        Path {
+            inner: Arc::from(new_path),
+        }
     }
 }
 
@@ -237,13 +265,19 @@ impl Path {
         Self::localappdata() / "Temp"
     }
 
+    #[inline]
     pub fn temp_file<S>(prefix: S) -> Self
     where
         S: AsRef<str>,
     {
         let ms = unsafe { GetTickCount64() };
-        let name = format!("{ms:x}");
-        Self::temp() / format!("{}{name}", prefix.as_ref())
+        // Use format! only once with both values
+        let prefix_str = prefix.as_ref();
+        let capacity = prefix_str.len() + 16; // 16 chars for hex timestamp
+        let mut filename = String::with_capacity(capacity);
+        filename.push_str(prefix_str);
+        write!(filename, "{ms:x}").unwrap_or(());
+        Self::temp() / filename
     }
 }
 

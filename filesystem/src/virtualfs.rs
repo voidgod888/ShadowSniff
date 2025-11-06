@@ -60,6 +60,7 @@ impl Default for VirtualFileSystem {
     }
 }
 
+#[inline]
 fn parent_path(s: &str) -> Option<String> {
     s.rfind('\\').map(|pos| {
         if pos == 0 {
@@ -71,26 +72,30 @@ fn parent_path(s: &str) -> Option<String> {
 }
 
 impl FileSystem for VirtualFileSystem {
+    #[inline]
     fn read_file<P>(&self, path: P) -> Result<Vec<u8>, u32>
     where
         P: AsRef<Path>,
     {
         let path = path.as_ref();
         let map = self.entries.read();
+        // Use as_str() to avoid Display formatting overhead
+        let path_str = path.as_str().to_string();
 
-        match map.get(&path.to_string()) {
+        match map.get(&path_str) {
             Some(Entry::File { data, .. }) => Ok(data.clone()),
             Some(Entry::Directory) => Err(1), // error: is a directory
             None => Err(2),                   // error: not found
         }
     }
 
+    #[inline]
     fn mkdir<P>(&self, path: P) -> Result<(), u32>
     where
         P: AsRef<Path>,
     {
         let path = path.as_ref();
-        let path_str = path.to_string();
+        let path_str = path.as_str().to_string();
         let mut map = self.entries.write();
 
         if map.contains_key(&path_str) {
@@ -109,12 +114,13 @@ impl FileSystem for VirtualFileSystem {
         Ok(())
     }
 
+    #[inline]
     fn mkdirs<P>(&self, path: P) -> Result<(), u32>
     where
         P: AsRef<Path>,
     {
         let path = path.as_ref();
-        let path_str = path.to_string();
+        let path_str = path.as_str().to_string();
         let mut map = self.entries.write();
 
         // Iterate through each directory component and create if missing
@@ -136,12 +142,13 @@ impl FileSystem for VirtualFileSystem {
         Ok(())
     }
 
+    #[inline]
     fn remove_dir_contents<P>(&self, path: P) -> Result<(), u32>
     where
         P: AsRef<Path>,
     {
         let path = path.as_ref();
-        let path_str = path.to_string();
+        let path_str = path.as_str().to_string();
         let mut map = self.entries.write();
 
         let prefix = if path_str.ends_with('\\') {
@@ -163,12 +170,13 @@ impl FileSystem for VirtualFileSystem {
         Ok(())
     }
 
+    #[inline]
     fn remove_dir<P>(&self, path: P) -> Result<(), u32>
     where
         P: AsRef<Path>,
     {
         let path = path.as_ref();
-        let path_str = path.to_string();
+        let path_str = path.as_str().to_string();
         let mut map = self.entries.write();
 
         // Only remove directory if empty (no entries with prefix)
@@ -191,12 +199,13 @@ impl FileSystem for VirtualFileSystem {
         }
     }
 
+    #[inline]
     fn remove_file<P>(&self, path: P) -> Result<(), u32>
     where
         P: AsRef<Path>,
     {
         let path = path.as_ref();
-        let path_str = path.to_string();
+        let path_str = path.as_str().to_string();
         let mut map = self.entries.write();
 
         match map.get(&path_str) {
@@ -209,12 +218,13 @@ impl FileSystem for VirtualFileSystem {
         }
     }
 
+    #[inline]
     fn create_file<P>(&self, path: P) -> Result<(), u32>
     where
         P: AsRef<Path>,
     {
         let path = path.as_ref();
-        let path_str = path.to_string();
+        let path_str = path.as_str().to_string();
         let mut map = self.entries.write();
 
         if map.contains_key(&path_str) {
@@ -233,6 +243,7 @@ impl FileSystem for VirtualFileSystem {
         Ok(())
     }
 
+    #[inline]
     fn write_file<P>(&self, path: P, data: &[u8]) -> Result<(), u32>
     where
         P: AsRef<Path>,
@@ -244,7 +255,7 @@ impl FileSystem for VirtualFileSystem {
             self.mkdirs(parent)?
         }
 
-        let path_str = path.to_string();
+        let path_str = path.as_str().to_string();
         let mut map = self.entries.write();
 
         match map.get_mut(&path_str) {
@@ -277,19 +288,23 @@ impl FileSystem for VirtualFileSystem {
         }
     }
 
+    #[inline]
     fn list_files_filtered<F, P>(&self, path: P, filter: &F) -> Option<Vec<Path>>
     where
         F: Fn(&Path) -> bool,
         P: AsRef<Path>,
     {
         let path = path.as_ref();
-        let dir_str = path.to_string();
+        let dir_str = path.as_str().to_string();
         let map = self.entries.read();
 
+        // Build prefix without cloning dir_str
         let prefix = if dir_str.ends_with('\\') {
-            dir_str.clone()
+            dir_str.as_str()
         } else {
-            format!("{dir_str}\\")
+            // Use a temporary string for prefix comparison, but avoid clone when possible
+            // We'll compare against dir_str + "\\" inline
+            ""
         };
 
         if !map.contains_key(&dir_str) {
@@ -300,11 +315,21 @@ impl FileSystem for VirtualFileSystem {
             _ => return None,
         }
 
+        let prefix_for_check = if prefix.is_empty() {
+            // Build prefix once for comparison
+            let mut temp = String::with_capacity(dir_str.len() + 1);
+            temp.push_str(&dir_str);
+            temp.push('\\');
+            temp
+        } else {
+            dir_str.clone()
+        };
+
         let mut seen = BTreeMap::new(); // to collect unique immediate children
         for key in map.keys() {
-            if key.starts_with(&prefix) {
+            if key.starts_with(&prefix_for_check) {
                 // strip prefix:
-                let remainder = &key[prefix.len()..];
+                let remainder = &key[prefix_for_check.len()..];
 
                 // immediate child = next component before next '\'
                 if let Some(pos) = remainder.find('\\') {
@@ -317,18 +342,32 @@ impl FileSystem for VirtualFileSystem {
             }
         }
 
-        let results = seen
+        // Build paths efficiently with pre-allocated capacity
+        let results: Vec<Path> = seen
             .keys()
-            .map(|child_name| {
-                // build full child path
+            .filter_map(|child_name| {
+                // build full child path efficiently
                 let full_path = if dir_str == "\\" {
-                    format!("\\{child_name}")
+                    let capacity = 1 + child_name.len();
+                    let mut s = String::with_capacity(capacity);
+                    s.push('\\');
+                    s.push_str(child_name);
+                    s
                 } else {
-                    format!("{dir_str}\\{child_name}")
+                    let capacity = dir_str.len() + 1 + child_name.len();
+                    let mut s = String::with_capacity(capacity);
+                    s.push_str(&dir_str);
+                    s.push('\\');
+                    s.push_str(child_name);
+                    s
                 };
-                Path::new(full_path)
+                let p = Path::new(full_path);
+                if filter(&p) {
+                    Some(p)
+                } else {
+                    None
+                }
             })
-            .filter(|p| filter(p))
             .collect();
 
         Some(results)
@@ -341,32 +380,35 @@ impl FileSystem for VirtualFileSystem {
         None
     }
 
+    #[inline]
     fn is_exists<P>(&self, path: P) -> bool
     where
         P: AsRef<Path>,
     {
         let path = path.as_ref();
-        let path_str = path.to_string();
+        let path_str = path.as_str().to_string();
         let map = self.entries.read();
         map.contains_key(&path_str)
     }
 
+    #[inline]
     fn is_dir<P>(&self, path: P) -> bool
     where
         P: AsRef<Path>,
     {
         let path = path.as_ref();
-        let path_str = path.to_string();
+        let path_str = path.as_str().to_string();
         let map = self.entries.read();
         matches!(map.get(&path_str), Some(Entry::Directory))
     }
 
+    #[inline]
     fn is_file<P>(&self, path: P) -> bool
     where
         P: AsRef<Path>,
     {
         let path = path.as_ref();
-        let path_str = path.to_string();
+        let path_str = path.as_str().to_string();
         let map = self.entries.read();
         matches!(map.get(&path_str), Some(Entry::File { .. }))
     }

