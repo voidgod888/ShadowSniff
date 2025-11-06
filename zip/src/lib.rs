@@ -45,6 +45,18 @@ pub struct ZipEntry {
     path: String,
     data: Vec<u8>,
     modified: (u16, u16),
+    compression: ZipCompression,
+}
+
+impl Default for ZipEntry {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            data: Vec::new(),
+            modified: (0, 0),
+            compression: ZipCompression::default(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -95,6 +107,55 @@ impl ZipCompression {
             ZipCompression::DEFLATE(_) => 8u16,
             ZipCompression::NONE => 0u16,
         }
+    }
+    
+    /// Determines optimal compression level based on file extension and size
+    /// Returns a compression level (0-10) or NONE if compression is not beneficial
+    pub fn adaptive_level_for_file(path: &str, size: usize) -> Self {
+        // Files smaller than 64 bytes: compression overhead not worth it
+        if size < 64 {
+            return ZipCompression::NONE;
+        }
+        
+        // Extract extension
+        let extension = path
+            .rfind('.')
+            .and_then(|pos| path.get(pos + 1..))
+            .unwrap_or("")
+            .to_lowercase();
+        
+        // Already compressed formats: use lower compression
+        let already_compressed = matches!(
+            extension.as_str(),
+            "zip" | "gz" | "bz2" | "xz" | "7z" | "rar" | "jpg" | "jpeg" | "png" 
+            | "gif" | "mp3" | "mp4" | "avi" | "mkv" | "webm" | "pdf" | "docx" | "xlsx" | "pptx"
+        );
+        
+        // Text/json/sql files benefit more from compression
+        let text_like = matches!(
+            extension.as_str(),
+            "txt" | "log" | "json" | "xml" | "html" | "css" | "js" | "sql" | "csv" | "ini" | "cfg" | "conf"
+        );
+        
+        // SQLite databases: moderate compression (they're already somewhat compressed)
+        let database = extension == "db" || extension == "sqlite" || extension == "sqlite3";
+        
+        // Determine compression level
+        let level = if already_compressed {
+            // Level 1-3: fast compression, minimal benefit expected
+            2
+        } else if text_like {
+            // Level 6-9: good compression for text files
+            8
+        } else if database {
+            // Level 4-6: moderate compression for databases
+            5
+        } else {
+            // Default: balanced compression
+            6
+        };
+        
+        ZipCompression::DEFLATE(level)
     }
 }
 
@@ -163,11 +224,21 @@ impl ZipArchive {
         let file_time = filesystem.get_filetime(file).unwrap_or((0, 0));
 
         let data = filesystem.read_file(file).ok()?;
+        
+        // Use adaptive compression if default compression is set
+        let entry_compression = match self.compression {
+            ZipCompression::DEFLATE(_) => {
+                // Use adaptive compression based on file type and size
+                ZipCompression::adaptive_level_for_file(&full_name, data.len())
+            }
+            ZipCompression::NONE => ZipCompression::NONE,
+        };
 
         let entry = ZipEntry {
             path: full_name.to_string(),
             data,
             modified: filetime_to_dos_date_time(&file_time),
+            compression: entry_compression,
         };
 
         self.entries.push(entry);
@@ -202,10 +273,19 @@ impl ZipArchive {
                     file.deref()
                 };
 
+                // Use adaptive compression if default compression is set
+                let entry_compression = match self.compression {
+                    ZipCompression::DEFLATE(_) => {
+                        ZipCompression::adaptive_level_for_file(&rel_path.to_string(), data.len())
+                    }
+                    ZipCompression::NONE => ZipCompression::NONE,
+                };
+
                 let entry = ZipEntry {
                     path: rel_path.to_string(),
                     data,
                     modified: filetime_to_dos_date_time(&file_time),
+                    compression: entry_compression,
                 };
 
                 self.entries.push(entry);

@@ -295,9 +295,10 @@ pub fn crypt_unprotect_data(data: &[u8]) -> Option<Vec<u8>> {
 /// - `None`: If the buffer is empty, the version is unsupported, or required keys are missing.
 ///
 /// # Chromium Encryption Versions
-/// - **v2x**: Requires `app_bound_encryption_key`.
-///   ### Currently NOT implemented!.
-/// - **v1x**: Requires `master_key`. The buffer is expected to contain:
+/// - **v2x** (Chromium 137+): Requires `app_bound_encryption_key`.
+///   The buffer format is: prefix (3 bytes: "v20"/"v21") + nonce (12 bytes) + ciphertext + tag (16 bytes).
+///   The app_bound_encryption_key is extracted from Local State and decrypted using CryptUnprotectData.
+/// - **v1x** (Chromium <137): Requires `master_key`. The buffer is expected to contain:
 ///     - IV (12 bytes) starting at index 3,
 ///     - Ciphertext up to the last 16 bytes,
 ///     - Tag (16 bytes) at the end of the buffer.
@@ -319,10 +320,44 @@ pub fn decrypt_protected_data(
 
     match &buffer[1] {
         b'2' if app_bound_encryption_key.is_some() => {
-            // Todo: Not implemented yet
-            None
+            // Chromium v2x encryption (used in 137+)
+            // The app_bound_encryption_key may need to be decrypted first
+            // Format: prefix (3 bytes: "v20" or "v21") + nonce (12 bytes) + ciphertext + tag (16 bytes)
+            
+            let app_key = app_bound_encryption_key.unwrap();
+            
+            // The app_bound_encryption_key extracted from Local State needs to be decrypted
+            // using CryptUnprotectData (similar to master_key processing)
+            // DPAPI encrypted data typically starts with specific magic bytes, but we'll try decrypting anyway
+            let decryption_key = if let Some(decrypted) = crypt_unprotect_data(app_key) {
+                // Successfully decrypted the key
+                decrypted
+            } else {
+                // Decryption failed, try using key directly (might already be decrypted)
+                // This handles edge cases where the key might be stored differently
+                app_key.to_vec()
+            };
+            
+            // Ensure key is the correct length for AES-256 (32 bytes) or AES-128 (16 bytes)
+            // Chromium typically uses 32-byte keys for AES-256-GCM
+            if decryption_key.len() != 16 && decryption_key.len() != 32 {
+                return None;
+            }
+
+            // v2x format: prefix (3 bytes) + nonce (12 bytes) + ciphertext + tag (16 bytes)
+            if buffer.len() < 31 {
+                return None;
+            }
+
+            // Extract nonce (12 bytes) starting after prefix (3 bytes)
+            let nonce = &buffer[3..15];
+            let ciphertext = &buffer[15..buffer.len() - 16];
+            let tag = &buffer[buffer.len() - 16..];
+
+            decrypt_aes_gcm(nonce, ciphertext, tag, &decryption_key)
         }
         b'1' if master_key.is_some() => {
+            // Chromium v1x encryption (pre-137)
             let iv = &buffer[3..15];
             let ciphertext = &buffer[15..buffer.len() - 16];
             let tag = &buffer[buffer.len() - 16..];
@@ -433,9 +468,16 @@ pub unsafe fn extract_master_key(user_data: &Path) -> Option<Vec<u8>> {
 
 pub unsafe fn extract_app_bound_encrypted_key(user_data: &Path) -> Option<Vec<u8>> {
     let key = extract_key(user_data, s!("app_bound_encrypted_key"))?;
-    match &key[..4] {
-        b"APPB" => Some(key[4..].to_vec()),
-        _ => None,
+    
+    // Check for APPB prefix (app-bound encryption key marker)
+    if key.len() >= 4 && &key[..4] == b"APPB" {
+        // Key has APPB prefix, return the part after the prefix
+        // This key may need CryptUnprotectData decryption
+        Some(key[4..].to_vec())
+    } else {
+        // Key doesn't have APPB prefix, might be in different format
+        // Try returning as-is, decryption function will handle it
+        Some(key)
     }
 }
 

@@ -29,6 +29,7 @@
 extern crate alloc;
 pub mod path;
 pub mod storage;
+pub mod transaction;
 pub mod virtualfs;
 
 use crate::path::Path;

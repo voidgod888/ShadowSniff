@@ -30,6 +30,7 @@ extern crate alloc;
 
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::iter::once;
@@ -37,6 +38,7 @@ use core::mem::zeroed;
 use core::ptr::{null, null_mut};
 use core::slice;
 use json::{ParseError, Value, parse};
+use utils::ecc::{EccError, EncryptedData, NetworkEncryption};
 use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, GetLastError};
 use windows_sys::Win32::Networking::WinHttp::{
     URL_COMPONENTS, WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_ADDREQ_FLAG_ADD, WINHTTP_FLAG_SECURE,
@@ -168,6 +170,7 @@ pub struct Request {
     url: String,
     headers: BTreeMap<String, String>,
     body: Option<Vec<u8>>,
+    encryption: Option<Arc<NetworkEncryption>>,
 }
 
 #[derive(Debug)]
@@ -202,6 +205,7 @@ impl Request {
                 url: url.into(),
                 headers: BTreeMap::default(),
                 body: None,
+                encryption: None,
             },
         }
     }
@@ -216,8 +220,15 @@ impl Request {
                 url: url.into(),
                 headers: BTreeMap::default(),
                 body: None,
+                encryption: None,
             },
         }
+    }
+
+    /// Set ECC encryption for this request
+    pub fn with_encryption(mut self, encryption: Arc<NetworkEncryption>) -> Self {
+        self.encryption = Some(encryption);
+        self
     }
 
     pub fn send(&self) -> Result<Response, u32> {
@@ -302,8 +313,38 @@ impl Request {
                 }
             }
 
-            let (body_ptr, body_len) = match &self.body {
-                Some(b) => (b.as_ptr(), b.len() as u32),
+            // Encrypt body if encryption is enabled
+            let body_data = if let Some(ref encryption) = self.encryption {
+                if let Some(ref body) = self.body {
+                    // Encrypt the body using ECC encryption
+                    match encryption.encrypt(body) {
+                        Ok(encrypted) => {
+                            // Format: JSON with encrypted data
+                            // Structure: {"encrypted": true, "data": base64(ciphertext), "iv": base64(iv), "tag": base64(tag), "pubkey": base64(public_key)}
+                            use utils::base64::base64_encode;
+                            let encrypted_json = format!(
+                                r#"{{"encrypted":true,"data":"{}","iv":"{}","tag":"{}","pubkey":"{}"}}"#,
+                                String::from_utf8_lossy(&base64_encode(&encrypted.ciphertext)),
+                                String::from_utf8_lossy(&base64_encode(&encrypted.iv)),
+                                String::from_utf8_lossy(&base64_encode(&encrypted.tag)),
+                                String::from_utf8_lossy(&base64_encode(&encrypted.public_key)),
+                            );
+                            Some(encrypted_json.into_bytes())
+                        }
+                        Err(_) => {
+                            // If encryption fails, send unencrypted (fallback)
+                            self.body.clone()
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                self.body.clone()
+            };
+
+            let (body_ptr, body_len) = match body_data {
+                Some(ref b) => (b.as_ptr(), b.len() as u32),
                 None => (null(), 0),
             };
 
@@ -408,6 +449,8 @@ pub trait RequestBuilder {
     where
         S: AsRef<str>;
 
+    fn encryption(self, encryption: Arc<NetworkEncryption>) -> Self;
+
     fn build(self) -> Request;
 }
 
@@ -442,6 +485,11 @@ impl RequestBuilder for Request {
         self
     }
 
+    fn encryption(mut self, encryption: Arc<NetworkEncryption>) -> Self {
+        self.encryption = Some(encryption);
+        self
+    }
+
     fn build(self) -> Request {
         self
     }
@@ -457,6 +505,11 @@ impl RequestBuilder for GetBuilder {
         S: AsRef<str>,
     {
         self.inner = self.inner.header(key, value);
+        self
+    }
+
+    fn encryption(mut self, encryption: Arc<NetworkEncryption>) -> Self {
+        self.inner = self.inner.with_encryption(encryption);
         self
     }
 
@@ -478,6 +531,11 @@ impl RequestBuilder for PostBuilder {
         self
     }
 
+    fn encryption(mut self, encryption: Arc<NetworkEncryption>) -> Self {
+        self.inner = self.inner.with_encryption(encryption);
+        self
+    }
+
     fn build(self) -> Request {
         self.inner
     }
@@ -490,5 +548,82 @@ impl BodyRequestBuilder for PostBuilder {
     {
         self.inner.body = Some(body.into());
         self
+    }
+}
+
+/// Extension trait for Response to decrypt encrypted responses
+pub trait ResponseDecrypt {
+    /// Decrypt response body if it's encrypted
+    fn decrypt_body(&self, encryption: &NetworkEncryption) -> Result<Vec<u8>, EccError>;
+}
+
+impl ResponseDecrypt for Response {
+    fn decrypt_body(&self, encryption: &NetworkEncryption) -> Result<Vec<u8>, EccError> {
+        use utils::base64::base64_decode_string;
+        
+        // Try to parse as JSON encrypted format
+        if let Ok(json_value) = json::parse(&self.body) {
+            if let Value::Object(obj) = &json_value {
+                // Check if encrypted flag is present
+                let is_encrypted = obj.get("encrypted")
+                    .and_then(|v| match v {
+                        Value::Boolean(b) => Some(*b),
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+                
+                if is_encrypted {
+                    // Extract encrypted components
+                    let ciphertext_str = obj.get("data")
+                        .and_then(|v| match v {
+                            Value::String(s) => Some(s.as_ref()),
+                            _ => None,
+                        })
+                        .ok_or(EccError::InvalidData)?;
+                    
+                    let iv_str = obj.get("iv")
+                        .and_then(|v| match v {
+                            Value::String(s) => Some(s.as_ref()),
+                            _ => None,
+                        })
+                        .ok_or(EccError::InvalidData)?;
+                    
+                    let tag_str = obj.get("tag")
+                        .and_then(|v| match v {
+                            Value::String(s) => Some(s.as_ref()),
+                            _ => None,
+                        })
+                        .ok_or(EccError::InvalidData)?;
+                    
+                    let pubkey_str = obj.get("pubkey")
+                        .and_then(|v| match v {
+                            Value::String(s) => Some(s.as_ref()),
+                            _ => None,
+                        })
+                        .ok_or(EccError::InvalidData)?;
+                    
+                    let ciphertext = base64_decode_string(ciphertext_str)
+                        .ok_or(EccError::InvalidData)?;
+                    let iv = base64_decode_string(iv_str)
+                        .ok_or(EccError::InvalidData)?;
+                    let tag = base64_decode_string(tag_str)
+                        .ok_or(EccError::InvalidData)?;
+                    let peer_public_key = base64_decode_string(pubkey_str)
+                        .ok_or(EccError::InvalidData)?;
+                    
+                    let encrypted_data = EncryptedData {
+                        ciphertext,
+                        iv,
+                        tag,
+                        public_key: peer_public_key,
+                    };
+                    
+                    return encryption.decrypt(&encrypted_data);
+                }
+            }
+        }
+        
+        // Not encrypted, return body as-is
+        Ok(self.body.clone())
     }
 }

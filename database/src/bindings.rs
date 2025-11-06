@@ -28,10 +28,11 @@ use crate::bindings::sqlite3_bindings::{
     SQLITE_INTEGER, SQLITE_ROW, SQLITE_TEXT, sqlite3, sqlite3_close, sqlite3_column_blob,
     sqlite3_column_bytes, sqlite3_column_count, sqlite3_column_double, sqlite3_column_int64,
     sqlite3_column_text, sqlite3_column_type, sqlite3_deserialize, sqlite3_finalize,
-    sqlite3_initialize, sqlite3_malloc, sqlite3_open, sqlite3_prepare_v2, sqlite3_step,
-    sqlite3_stmt,
+    sqlite3_initialize, sqlite3_malloc, sqlite3_open, sqlite3_prepare_v2, sqlite3_reset,
+    sqlite3_step, sqlite3_stmt,
 };
 use crate::{Database, DatabaseReader, TableRecord, Value};
+use alloc::collections::BTreeMap;
 use alloc::ffi::CString;
 use alloc::format;
 use alloc::string::String;
@@ -42,15 +43,27 @@ use core::ptr;
 use core::ptr::null_mut;
 use delegate::delegate;
 use obfstr::obfstr as s;
+use spin::RwLock;
+use utils::intern::intern_table_name;
 
 mod sqlite3_bindings;
 
 pub struct Sqlite3BindingsDatabase {
     db: *mut sqlite3,
+    statement_cache: RwLock<BTreeMap<String, *mut sqlite3_stmt>>,
 }
 
 impl Drop for Sqlite3BindingsDatabase {
     fn drop(&mut self) {
+        // Clean up all cached statements
+        let cache = self.statement_cache.write();
+        for stmt in cache.values() {
+            unsafe {
+                sqlite3_finalize(*stmt);
+            }
+        }
+        drop(cache); // Release write lock before closing DB
+        
         unsafe {
             sqlite3_close(self.db);
         }
@@ -106,7 +119,10 @@ impl Database for Sqlite3BindingsDatabase {
             return Err(rc);
         }
 
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            statement_cache: RwLock::new(BTreeMap::new()),
+        })
     }
 }
 
@@ -118,19 +134,50 @@ impl DatabaseReader for Sqlite3BindingsDatabase {
     where
         S: AsRef<str>,
     {
-        let query = format!("{} {}", s!("SELECT * FROM"), table_name.as_ref());
-        let c_query = CString::new(query).unwrap();
-        let mut stmt: *mut sqlite3_stmt = null_mut();
+        // Use string interning for table names to reduce allocations
+        let table_name_arc = intern_table_name(table_name.as_ref());
+        let table_name_str: &str = &table_name_arc;
+        
+        // Try to get cached statement
+        let stmt = {
+            let cache = self.statement_cache.read();
+            cache.get(table_name_str).copied()
+        };
 
-        let rc =
-            unsafe { sqlite3_prepare_v2(self.db, c_query.as_ptr(), -1, &mut stmt, null_mut()) };
+        let stmt = if let Some(cached_stmt) = stmt {
+            // Reset and reuse cached statement
+            unsafe {
+                if sqlite3_reset(cached_stmt) != 0 {
+                    return None;
+                }
+            }
+            cached_stmt
+        } else {
+            // Prepare new statement and cache it
+            let query = format!("{} {}", s!("SELECT * FROM"), table_name_str);
+            let c_query = CString::new(query).ok()?;
+            let mut new_stmt: *mut sqlite3_stmt = null_mut();
 
-        if rc != 0 || stmt.is_null() {
-            return None;
-        }
+            let rc = unsafe {
+                sqlite3_prepare_v2(self.db, c_query.as_ptr(), -1, &mut new_stmt, null_mut())
+            };
+
+            if rc != 0 || new_stmt.is_null() {
+                return None;
+            }
+
+            // Cache the statement using interned string
+            {
+                let mut cache = self.statement_cache.write();
+                cache.insert(table_name_str.to_string(), new_stmt);
+            }
+
+            new_stmt
+        };
 
         let table = SqliteTable::from(stmt);
-        unsafe { sqlite3_finalize(stmt) };
+        // Don't finalize here - keep statement cached for reuse
+        // unsafe { sqlite3_finalize(stmt) };
 
         Some(table.rows.into_iter())
     }

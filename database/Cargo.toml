@@ -10,3 +10,5 @@ cc = "1.2"
 filesystem = { path = "../filesystem" }
 obfstr = "0.4.4"
 delegate = "0.13.4"
+spin = "0.10.0"
+utils = { path = "../utils" }
