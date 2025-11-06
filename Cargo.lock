@@ -1307,6 +1307,7 @@ name = "requests"
 version = "0.1.0"
 dependencies = [
  "json",
+ "utils",
  "windows-sys 0.61.0",
 ]
 
