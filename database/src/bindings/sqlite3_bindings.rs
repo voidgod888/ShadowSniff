@@ -98,4 +98,6 @@ unsafe extern "C" {
     ) -> core::ffi::c_int;
 
     pub fn sqlite3_step(arg1: *mut sqlite3_stmt) -> core::ffi::c_int;
+
+    pub fn sqlite3_reset(pStmt: *mut sqlite3_stmt) -> core::ffi::c_int;
 }
