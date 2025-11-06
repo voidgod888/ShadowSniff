@@ -33,7 +33,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter};
-use windows::Win32::UI::WindowsAndMessaging::{
+use windows_sys::Win32::UI::WindowsAndMessaging::{
     MB_ABORTRETRYIGNORE, MB_CANCELTRYCONTINUE, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION,
     MB_ICONWARNING, MB_OK, MB_OKCANCEL, MB_RETRYCANCEL, MB_YESNO, MB_YESNOCANCEL,
 };
@@ -69,10 +69,10 @@ impl Ask for Show {
 #[repr(u32)]
 #[derive(Display, Copy, Clone, EnumIter, Serialize, Deserialize)]
 enum SourceIcon {
-    Error = MB_ICONERROR.0,
-    Warning = MB_ICONWARNING.0,
-    Information = MB_ICONINFORMATION.0,
-    Question = MB_ICONQUESTION.0,
+    Error = MB_ICONERROR,
+    Warning = MB_ICONWARNING,
+    Information = MB_ICONINFORMATION,
+    Question = MB_ICONQUESTION,
 }
 
 impl Ask for SourceIcon {
@@ -91,13 +91,13 @@ impl Ask for SourceIcon {
 #[repr(u32)]
 #[derive(Copy, Clone, EnumIter, Serialize, Deserialize)]
 enum SourceButton {
-    Ok = MB_OK.0,
-    OkCancel = MB_OKCANCEL.0,
-    YesNo = MB_YESNO.0,
-    YesNoCancel = MB_YESNOCANCEL.0,
-    RetryCancel = MB_RETRYCANCEL.0,
-    AbortRetryIgnore = MB_ABORTRETRYIGNORE.0,
-    CancelTryContinue = MB_CANCELTRYCONTINUE.0,
+    Ok = MB_OK,
+    OkCancel = MB_OKCANCEL,
+    YesNo = MB_YESNO,
+    YesNoCancel = MB_YESNOCANCEL,
+    RetryCancel = MB_RETRYCANCEL,
+    AbortRetryIgnore = MB_ABORTRETRYIGNORE,
+    CancelTryContinue = MB_CANCELTRYCONTINUE,
 }
 
 impl Ask for SourceButton {
@@ -208,8 +208,8 @@ impl Display for SourcePresets {
 
 impl ToExpr for SourcePresets {
     fn to_expr(&self, _args: ()) -> TokenStream {
-        let ok = MB_OK.0;
-        let error = MB_ICONERROR.0;
+        let ok = MB_OK;
+        let error = MB_ICONERROR;
 
         match self {
             SourcePresets::NotSupported => quote! {

